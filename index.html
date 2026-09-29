@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Egg Tray Orders</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{--bg:#fffaf0;--card:#fff;--tx:#2b2418;--mu:#7a6f5d;--ac:#d98a00;--bd:#eadfc8;--ok:#2e7d32;--er:#c62828;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+:root:not([data-theme="light"]){}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1c1811;--card:#28221a;--tx:#f3ead8;--mu:#a99d86;--bd:#3d3527}}
+:root[data-theme="dark"]{--bg:#1c1811;--card:#28221a;--tx:#f3ead8;--mu:#a99d86;--bd:#3d3527}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,sans-serif}
+main{max-width:640px;margin:0 auto;padding:16px}
+h1{font-size:1.4rem;margin:0 0 4px}h2{font-size:1.05rem;margin:20px 0 8px}
+.mu{color:var(--mu);font-size:.85rem}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;margin:8px 0}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+input,textarea{width:100%;padding:10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font:inherit;margin:4px 0}
+input.n{width:80px;text-align:center}
+button{background:var(--ac);color:#fff;border:0;border-radius:8px;padding:10px 14px;font:inherit;font-weight:600;cursor:pointer}
+button.g{background:transparent;color:var(--tx);border:1px solid var(--bd)}
+button:disabled{opacity:.4}
+.tabs{display:flex;gap:6px;margin:12px 0}.tabs button{flex:1}
+.tag{font-size:.8rem;padding:2px 8px;border-radius:99px;background:var(--bd)}
+.ok{color:var(--ok)}.er{color:var(--er)}
+.msg{padding:10px;border-radius:8px;margin:8px 0;background:var(--bd)}
+.hide{display:none}
+</style></head><body><main>
+<h1>🥚 Fresh Eggs — Order by Tray</h1>
+<div class="mu" id="sync">Connecting…</div>
+<div class="tabs"><button id="tShop">Shop</button><button id="tAdm" class="g">Seller login</button></div>
+<div id="msg"></div>
+
+<section id="shop">
+  <h2>Available today</h2><div id="list"></div>
+  <h2>Your details</h2>
+  <div class="card">
+    <input id="name" placeholder="Full name" autocomplete="name">
+    <input id="phone" placeholder="Phone (optional)" inputmode="tel" autocomplete="tel">
+    <textarea id="addr" rows="3" placeholder="Delivery address"></textarea>
+  </div>
+  <div class="card row"><b>Total</b><b id="total">0</b></div>
+  <button id="place" style="width:100%">Confirm order</button>
+</section>
+
+<section id="adm" class="hide">
+  <h2>Prices &amp; stock</h2>
+  <div class="row" style="margin-bottom:8px"><span class="mu">Signed in as seller</span><button id="forget" class="g" style="font-size:.8rem;padding:6px 10px">Forget saved password</button></div>
+  <div class="card"><label class="mu">Currency symbol</label><input id="cur" placeholder="e.g. ₱ or $" maxlength="4"></div>
+  <div id="admList"></div>
+  <button id="save" style="width:100%;margin-top:8px">Save prices &amp; stock</button>
+  <p class="mu">“Refill” adds trays to the current stock. Stock drops automatically with every confirmed order.</p>
+  <h2>Orders</h2><div id="orders"></div>
+</section>
+<p style="text-align:center;margin:28px 0 8px;font-size:.95rem;color:var(--tx);opacity:.75">App developed by Perlas. All Rights Reserved 2026</p>
+</main>
+<script>
+const SUPABASE_URL="https://jwwvzodojcwfmohvzzmo.supabase.co";
+const SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp3d3Z6b2RvamN3Zm1vaHZ6em1vIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA1MjkzNDQsImV4cCI6MjEwNjEwNTM0NH0.H3Qov-tR783O918n7AAD4G1JSSvsrEMIRmdibEsfs70";
+const SIZES=["Jumbo","Xtra Large","Large","Medium"];
+let inv={cur:"",items:{}},orders=[],qty={},pw=sessionStorage.getItem("pw")||localStorage.getItem("pw")||"",isAdmin=false;
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const it=s=>inv.items[s]||{price:0,stock:0};
+const money=n=>(inv.cur||"")+Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
+function msg(t,bad){$("msg").innerHTML=t?`<div class="msg ${bad?"er":"ok"}">${esc(t)}</div>`:"";}
+async function rpc(fn,args){
+  const r=await fetch(SUPABASE_URL+"/rest/v1/rpc/"+fn,{method:"POST",headers:{"Content-Type":"application/json",apikey:SUPABASE_KEY,Authorization:"Bearer "+SUPABASE_KEY},body:JSON.stringify(args||{})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(d.message||"Request failed ("+r.status+")");return d;}
+function renderShop(){
+  $("list").innerHTML=SIZES.map(s=>{const i=it(s),q=Math.min(qty[s]||0,i.stock);qty[s]=q;
+    return `<div class="card row"><div><b>${s}</b><div class="mu">${money(i.price)} / tray · <span class="${i.stock>0?"ok":"er"}">${i.stock>0?i.stock+" trays available":"Out of stock"}</span></div></div>
+    <div class="row"><button class="g" data-s="${s}" data-d="-1">−</button><b style="min-width:24px;text-align:center">${q}</b><button class="g" data-s="${s}" data-d="1" ${q>=i.stock?"disabled":""}>+</button></div></div>`}).join("");
+  $("total").textContent=money(SIZES.reduce((a,s)=>a+(qty[s]||0)*it(s).price,0));
+}
+function renderAdm(force){
+  if(!isAdmin)return;
+  if(!force&&document.activeElement&&$("adm").contains(document.activeElement)&&document.activeElement.tagName==="INPUT")return;
+  $("cur").value=inv.cur||"";
+  $("admList").innerHTML=SIZES.map(s=>{const i=it(s);return `<div class="card"><b>${s}</b> <span class="mu">(in stock: ${i.stock})</span>
+   <div class="row"><label class="mu">Price/tray<input class="n" style="width:100%" type="number" min="0" step="any" id="p_${s}" value="${i.price}"></label>
+   <label class="mu">Set stock<input class="n" style="width:100%" type="number" min="0" id="s_${s}" value="${i.stock}"></label>
+   <label class="mu">Refill (+)<input class="n" style="width:100%" type="number" min="0" id="r_${s}" value="0"></label></div></div>`}).join("");
+  $("orders").innerHTML=orders.length?orders.map(o=>`<div class="card"><div class="row"><b>${esc(o.name)}</b><span class="tag">${o.status==="delivered"?"Delivered":"Pending"}</span></div>
+   <div class="mu">${esc(o.address)}${o.phone?" · "+esc(o.phone):""}</div>
+   <div>${o.lines.map(l=>`${l.qty}× ${esc(l.size)}`).join(", ")} — <b>${money(o.total)}</b></div>
+   <div class="mu">${new Date(o.created_at).toLocaleString()}</div>
+   ${o.status!=="delivered"?`<button class="g" data-done="${o.id}" style="margin-top:6px">Mark delivered</button>`:""}</div>`).join(""):'<div class="mu">No orders yet.</div>';
+}
+function show(t){$("shop").classList.toggle("hide",t!=="shop");$("adm").classList.toggle("hide",t!=="adm");$("tShop").className=t==="shop"?"":"g";$("tAdm").className=t==="adm"?"":"g";}
+async function loadInv(){try{const d=await rpc("get_shop");inv={cur:d.cur||"",items:{}};(d.items||[]).forEach(x=>inv.items[x.size]={price:Number(x.price),stock:x.stock});renderShop();renderAdm();$("sync").textContent="Stock and prices update automatically.";}catch(e){$("sync").textContent="Could not load stock: "+e.message;}}
+async function loadOrders(){if(!isAdmin)return;try{orders=await rpc("admin_orders",{p_pw:pw});renderAdm();}catch(e){}}
+async function login(){
+  if(!pw){pw=prompt("Seller password:")||"";}
+  if(!pw)return;
+  try{
+    await rpc("admin_orders",{p_pw:pw});
+    isAdmin=true;
+    sessionStorage.setItem("pw",pw);
+    if(confirm("Remember this password on this device?")) localStorage.setItem("pw",pw);
+    $("tAdm").textContent="Seller panel";show("adm");await loadOrders();renderAdm(true);
+  }
+  catch(e){pw="";sessionStorage.removeItem("pw");localStorage.removeItem("pw");msg(/Unauthorized/.test(e.message)?"Wrong password.":"Seller login failed: "+e.message,1);}
+}
+$("tShop").onclick=()=>show("shop");
+$("tAdm").onclick=()=>isAdmin?show("adm"):login();
+$("list").onclick=e=>{const b=e.target.closest("button[data-s]");if(!b)return;const s=b.dataset.s;qty[s]=Math.max(0,(qty[s]||0)+Number(b.dataset.d));renderShop();};
+$("place").onclick=async()=>{
+  msg("");const name=$("name").value.trim(),address=$("addr").value.trim(),phone=$("phone").value.trim();
+  if(!name||!address)return msg("Please enter your name and delivery address.",1);
+  if(!SIZES.some(s=>qty[s]>0))return msg("Please choose at least one tray.",1);
+  $("place").disabled=true;
+  try{await rpc("place_order",{p_name:name,p_address:address,p_phone:phone,p_qty:qty});qty={};msg("Order confirmed! Thank you, "+name+". We'll deliver to your address.");$("name").value=$("addr").value=$("phone").value="";}
+  catch(err){msg(err.message,1);}
+  $("place").disabled=false;await loadInv();
+};
+$("save").onclick=async()=>{
+  const items={};
+  for(const s of SIZES){items[s]={price:Math.max(0,Number($("p_"+s).value)||0),stock:Math.max(0,Math.floor(Number($("s_"+s).value)||0))+Math.max(0,Math.floor(Number($("r_"+s).value)||0))};}
+  try{await rpc("admin_save",{p_pw:pw,p_cur:$("cur").value.trim(),p_items:items});msg("Saved.");await loadInv();renderAdm(true);}catch(e){msg("Could not save: "+e.message,1);}
+};
+$("forget").onclick=()=>{
+  localStorage.removeItem("pw");sessionStorage.removeItem("pw");pw="";isAdmin=false;
+  $("tAdm").textContent="Seller login";show("shop");msg("Saved password removed from this device.");
+};
+$("orders").onclick=async e=>{const b=e.target.closest("[data-done]");if(!b)return;try{await rpc("admin_done",{p_pw:pw,p_id:Number(b.dataset.done)});await loadOrders();}catch(x){msg("Could not update order.",1);}};
+renderShop();loadInv();if(pw)login();
+setInterval(()=>{loadInv();loadOrders();},20000);
+</script></body></html>
